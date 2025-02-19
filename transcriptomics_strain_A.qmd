@@ -6,7 +6,7 @@ Samuel Rice
 
 The changes in gene expression of strain A across different Next 2 conditions (B, C, D) when compared to the control (A) were analysed using DESeq2. The significant genes were visualised using volcano plots and heatmaps. The data was further analysed using PCA to check cluster distribution and identify outliers.
 
-#### Loading libraries 
+#### Loading libraries
 
 ```{r}
 # Load necessary libraries
@@ -60,44 +60,60 @@ print(unique(samples_info_A$day))
 
 -   Thresholds: LFC \> 1 and LFC\<-1 for biological significance
 
--    False Discovery Rate (FDR)-adjusted p-value \< 0.05 to control for multiple testing errors
+-   False Discovery Rate (FDR)-adjusted p-value \< 0.05 to control for multiple testing errors
+
+-   Statistical comparison- by default uses the wald test for DESeq2 comparing each condition with the control
+
+-   Save plots and DEG results
 
 ```{r}
-# Function to extract results, apply strict filtering, create volcano plot and identify significant DEGs
+# Define Volcano plot function
 generate_volcano_plot <- function(dds, control_condition, treatment_condition, day) {
+  
+  # Extract the dds results (differential expression) for each condition
+  # Here is the statistical comparison- by default uses the wald test for DESeq2
   results_dds <- results(dds, contrast = c("Next2", treatment_condition, control_condition))
+  # Convert the DESeq2 results to datafram and keep gene ids as identifiers
   results_df <- as.data.frame(results_dds) %>% rownames_to_column("gene_id")
   
+  # Data cleaning and filtering
   # Remove NA values
   results_df <- results_df %>% filter(!is.na(log2FoldChange), !is.na(padj))
   
-  # Define y-axis threshold for FDR visualization
-  max_neg_log10_pval <- 10  # Adjust as needed
+  # Define y-axis threshold to prevent extreme values
+  max_neg_log10_pval <- 10  
   
-  # Compute -log10(padj) but cap it at max_neg_log10_pval
+  # Compute -log10(padj) with threshold of max_neg_log10_pval to prevent over scaling (pmin)
   results_df$neg_log10_pval_adj <- pmin(-log10(results_df$padj + 1e-10), max_neg_log10_pval)
   
-  # Mark significant genes (padj < 0.05 **and** abs(Log2FC) >= 1)
+  # Identify significant genes
+  # padj < 0.05 + abs(Log2FC) >= 1
   results_df$significant <- results_df$padj < 0.05 & abs(results_df$log2FoldChange) >= 1
   
-  # Debugging: Check number of significant DEGs
+  # Debug step- print number of significant DEGs
   print(paste("Number of significant DEGs for Day", day, ":", sum(results_df$significant)))
   
-  # Generate volcano plot with both significant (red) and non-significant (grey) points
+  # Generate volcano plots coloured by significance
   plot <- ggplot(results_df, aes(x = log2FoldChange, y = neg_log10_pval_adj, color = significant)) +
+    
+    #scatter plot and colour definition
+    # Significant = red, Non significant = grey
     geom_point(alpha = 0.5) +
-    scale_color_manual(values = c(`TRUE` = "red", `FALSE` = "grey")) +  # Significant = red, Non-significant = grey
+    scale_color_manual(values = c(`TRUE` = "red", `FALSE` = "grey")) +  
+    # Add threshold lines and y-axis limit
     geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "blue") +
-    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +  # FDR threshold line
-    ylim(0, max_neg_log10_pval) +  # Set Y-axis limit
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +  
+    ylim(0, max_neg_log10_pval) +  
+    
+    # Add labels and titles
     labs(title = paste("Volcano Plot for Day", day, ": ", treatment_condition, "vs", control_condition),
          x = "Log2 Fold Change", y = "-Log10 FDR") +  
     theme_minimal()
-  
+  # print and save the volcano plots as pdf for maximal definition
   print(plot)
   ggsave(paste0("day", day, "_", treatment_condition, "_vs_", control_condition, "_volcano_plot.pdf"), plot = plot, device = "pdf")
   
-  # Save all DEGs (both significant and non-significant) to a CSV file
+  # Save all DEGs (significant and nonsignificant) to a CSV file
   write_csv(results_df, sprintf("all_DEGs_day%s_%s_vs_%s.csv", day, treatment_condition, control_condition))
 }
 ```
@@ -112,7 +128,7 @@ generate_volcano_plot <- function(dds, control_condition, treatment_condition, d
 
 -   Check matrix dimensions (debugging)
 
--   Create DESeq2 dataset (`DESeqDataSetFromMatrix`)
+-   Create DESeq2 dataset
 
 -   Run DESeq2 for normalization & differential expression
 
@@ -121,49 +137,57 @@ generate_volcano_plot <- function(dds, control_condition, treatment_condition, d
 -   Apply generate volcano plots function for each treatment vs. control
 
 ```{r}
-# Function to generate and plot volcano plots for a specific day
+# Function to generate and plot volcano plots for each specific day
 generate_and_plot <- function(day) {
-  # Debugging: Print the day being processed
+  
+  # Debug by printing the day being processed
   print(paste("Processing Day:", day))
   
   # Filter samples_info and counts for the specific day
   day_samples_info <- samples_info_A %>% filter(day == !!day)
   
-  # Debugging: Check filtered sample names for each day
+  # Debug step by checking the filtered sample names for each day
   print(paste("Samples for Day", day, ":"))
   print(day_samples_info$Snames)
   
-  # Check if there are enough samples for DESeq2 analysis
+  # Check if there are enough samples for DESeq2 analysis (>2)
+  # DEseq2 needs atleast 2 samples per day
+  # if incorrect skip the day to prevent errors
   if (nrow(day_samples_info) < 2) {
     message(paste("Skipping day", day, "due to insufficient samples"))
     return(NULL)
   }
   
   # Subset count matrix for selected samples
+  # drop = false ensures the result remains a matrix
   selected_columns <- day_samples_info$Snames
   day_counts <- counts_A[, colnames(counts_A) %in% selected_columns, drop = FALSE]
   
-  # Debugging: Check dimensions of count matrix
+  # Debug step by checking count matrix dimensions
   print(paste("Dimensions of count matrix for Day", day, ":", dim(day_counts)[1], "genes x", dim(day_counts)[2], "samples"))
   
+  # Debug step by ensuring there are enough samples in the count matrix
   if (ncol(day_counts) < 2) {
     message(paste("Not enough samples for Day", day, "- skipping."))
     return(NULL)
   }
   
-  # Prepare DESeq2 dataset
+  # Prepare DESeq2 dataset for handling errors
+  # tryCatch() prevents the entire script crashing if errors occor, e.g. missing values
+  # error message will be printed if there is an error/missing value
   dds <- tryCatch({
     DESeqDataSetFromMatrix(countData = day_counts, colData = day_samples_info, design = ~ Next2)
   }, error = function(e) {
     message(paste("Error creating DESeq dataset for Day", day, ":", e$message))
     return(NULL)
   })
-  
+  # Error handing step to enure message if there is no dds results
   if (is.null(dds)) return(NULL)
   
+  # Run DESeq2 for differential expression analysis
   dds <- DESeq(dds)
   
-  # Define control and treatment conditions
+  # Define control and treatment conditions for comparison
   control_condition <- "A"
   treatment_conditions <- setdiff(unique(day_samples_info$Next2), control_condition)
   
@@ -194,49 +218,57 @@ lapply(days, generate_and_plot)
 -   Visualize PCA results using `ggplot2`
 
 ```{r}
+# Function to create PCA plots
 generate_pca_plot <- function(day) {
   
+  # Debug by printing specific day for comparison
   print(paste("Processing PCA for Day:", day))
   
-  # Subset metadata for the selected day
+  # Subset metadata (samples info) for the selected day
   day_samples_info <- samples_info_A %>% filter(day == day)
   
-  # Extract corresponding count data
+  # Extract count data corresponding to the metadata
   selected_samples <- day_samples_info$Snames
   day_counts <- counts_A[, colnames(counts_A) %in% selected_samples, drop = FALSE]
   
-  # Ensure there are enough samples for PCA
+  # Ensure there are enough samples for PCA (>2)
   if (ncol(day_counts) < 2) {
     message(paste("Skipping Day", day, "due to insufficient samples"))
     return(NULL)
   }
   
-  # Create DESeq2 dataset for normalization
+  # Generate DESeq2 dataset for normalization using the count matrix and sample metadata
   dds <- DESeqDataSetFromMatrix(countData = day_counts, colData = day_samples_info, design = ~ Next2)
-  dds <- estimateSizeFactors(dds)  # Normalize for sequencing depth
-  norm_counts <- counts(dds, normalized = TRUE)  # Extract normalized counts
+  # Estimate size factors for normailisation
+  dds <- estimateSizeFactors(dds)  
   
-  # Perform PCA on log-transformed data (log2 normalization to stabilize variance)
+  # Extract normalised counts
+  norm_counts <- counts(dds, normalized = TRUE)  
+  
+  # Perform PCA on log-transformed data 
+  #log2 normalization to stabilize variance and avoid extreme values
+  # adding 1 prevents log(0) errors
+  # (t()) ensures samples are rows and genes are columns (transposing)
   pca_res <- prcomp(t(log2(norm_counts + 1)), center = TRUE, scale. = TRUE)
-  
-  # Convert PCA results to a data frame
+   
+  # Convert PCA results to a data frame and merge with metadata
   pca_data <- as.data.frame(pca_res$x)
-  
-  # Merge PCA data with sample metadata
   pca_data <- cbind(pca_data, day_samples_info)
   
   # Generate PCA plot
   pca_plot <- ggplot(pca_data, aes(x = PC1, y = PC2, color = Next2, shape = Next2)) +
+    # Scatter plot colour coded by experimental condition
     geom_point(size = 3, alpha = 0.8) +
     scale_color_brewer(palette = "Set1") +
+    
+    # Add title and axis labels with % variance
     labs(title = paste("PCA Plot for Day", day),
          x = paste0("Principal Component 1 (", round(100 * summary(pca_res)$importance[2, 1], 1), "% Variance)"),
          y = paste0("Principal Component 2 (", round(100 * summary(pca_res)$importance[2, 2], 1), "% Variance)")) +
     theme_minimal()
   
+  # Print and save PCA plot
   print(pca_plot)
-  
-  # Save PCA plot
   ggsave(paste0("PCA_plot_Day", day, ".pdf"), plot = pca_plot, device = "pdf", width = 8, height = 6)
 }
 
@@ -268,68 +300,79 @@ conditions <- c("B", "C", "D")
 
 -   Filters samples for a given condition vs. control (A).
 
--   Runs DESeq2 for differential expression analysis.
+-   Runs DESeq2 for differential expression analysis for each day
 
 -   Extracts significant genes (padj \< 0.05 & log2FC ≥ 1).
 
 -   Combines DEGs across all days into a single list.
 
+-   Union genes are the differentially expressed genes (DEGs) found across all days for a given condition.
+
 ```{r}
+# Function to combine DEGs across all days into union set
 get_union_genes_across_days <- function(condition) {
+  # create an empty list for all days
   all_genes <- list()
-  
+  # for loop to iterate over each day
   for (day in days) {
     print(sprintf("Finding DEGs for Condition %s on Day %s", condition, day))
     
     # Subset data for the given condition vs control (A)
     day_samples_info <- samples_info_A %>% filter(day == !!day & Next2 %in% c("A", condition))
     
+    # Debug step to make sure theres enough samples
     if (nrow(day_samples_info) < 2) {
       message(sprintf("Skipping Condition %s on Day %s due to insufficient samples.", condition, day))
       next
     }
     
-    # Subset count matrix
+    # Subset count matrix in include corresponding samples for the day
     selected_columns <- day_samples_info$Snames
     day_counts <- counts_A[, colnames(counts_A) %in% selected_columns, drop = FALSE]
     
+    # Debug message to ensure theres valid count data
     if (ncol(day_counts) == 0) {
       message(sprintf("Skipping Condition %s on Day %s: No valid count data.", condition, day))
       next
     }
     
-    # Ensure correct factor levels
+    # Set factors for DESeq2 and ensure Next2 A is the control comparison
     day_samples_info$Next2 <- factor(day_samples_info$Next2, levels = c("A", condition))
     
-    # Run DESeq2
+    # Run DESeq2 with tryCatch to handle errors
     dds <- tryCatch({
       dds <- DESeqDataSetFromMatrix(countData = day_counts, colData = day_samples_info, design = ~ Next2)
-      dds <- dds[rowSums(counts(dds) >= 10) >= 2, ]  # Filter low-expression genes
+      # Filter low-expression genes
+      dds <- dds[rowSums(counts(dds) >= 10) >= 2, ]       # run the DESeq2 noramlisation and statistical modelling
       DESeq(dds)
+      # Debug step to handle errors and return null if errors occur
     }, error = function(e) {
       message(sprintf("Error running DESeq2 for Condition %s on Day %s: %s", condition, day, e$message))
       return(NULL)
     })
-    
+    # skip further analysis if failed deseq2
     if (is.null(dds)) next
     
-    # Extract significant DEGs
+    # Extract significant DEGs by using statistical testing - default wald test
     res <- results(dds, contrast = c("Next2", condition, "A"))
+    # Select significant genes based on adjp-value (<0.05) and LFC (1)
     significant_genes <- rownames(res)[which(res$padj < 0.05 & abs(res$log2FoldChange) >= 1)]
     
+    # debug message to check the number of significant DEGs
     print(sprintf("Number of significant DEGs for Condition %s on Day %s: %d", condition, day, length(significant_genes)))
-    
+    # Storee the DEGs for each day
     all_genes[[day]] <- significant_genes
   }
   
-  # Combine DEGs across all days
+  # Combine DEGs across all days to get the union
   union_genes <- unique(unlist(all_genes))
   
+  # Debug step to check if any DEGs were found
   if (length(union_genes) == 0) {
     message(sprintf("No significant genes found across all days for Condition %s.", condition))
     return(NULL)
-  }
-  
+  } 
+  # return the union DEGs across the days
   return(union_genes)
 }
 
@@ -339,48 +382,54 @@ get_union_genes_across_days <- function(condition) {
 
 -   Filters samples for a specific day & condition.
 
--   Normalizes gene expression using DESeq2's `vst()`.
+-   Normalizes gene expression using DESeq2 (corrects for library size differences), VST (stabalise variance, especially in low expression genes) and Z-score transformation (standardises each genes expression relitive to its mean and variance.
 
 -   Applies Z-score scaling for better contrast.
 
 -   Generates a heatmap using `pheatmap()`.
 
 ```{r}
+# heatmap function
 generate_heatmap <- function(day, condition, global_genes, comparison_label) {
   print(sprintf("Generating heatmap for Day %s (%s)", day, comparison_label))
   
   # Filter samples for the specific day and condition
   day_samples_info <- samples_info_A %>% filter(day == !!day & Next2 %in% c("A", condition))
   
+  # Debug message to check there are enough samples for each condition
   if (nrow(day_samples_info) < 2) {
     message(sprintf("Skipping heatmap for Day %s: %s due to insufficient samples.", day, comparison_label))
     return(NULL)
   }
   
-  # Subset count matrix
+  # select sample names for specific day
   selected_columns <- day_samples_info$Snames
+  # Subset count matrix to include selected samples
   day_counts <- counts_A[, colnames(counts_A) %in% selected_columns, drop = FALSE]
   
-  # Filter valid genes
+  # Find the valid genes from the union (global) and counts matrix
   valid_genes <- intersect(global_genes, rownames(day_counts))
   
+  # Debug step to handle if tehre are no DEGs found on this day
   if (length(valid_genes) == 0) {
     message(sprintf("Skipping Day %s for %s: No valid genes available.", day, comparison_label))
     return(NULL)
   }
   
-  # Create DESeq2 dataset
+  # Create DESeq2 dataset for normalisation and DEGs
   dds <- DESeqDataSetFromMatrix(countData = day_counts, colData = day_samples_info, design = ~ Next2)
+  # Apply variance stabalising transformation to further normalise
   vsd <- vst(dds, blind = FALSE)
   norm_counts <- assay(vsd)
   
-  # Scale data for heatmap
+  # Scale data for heatmap by using z score transformation 
   heatmap_data <- t(scale(t(norm_counts[valid_genes, , drop = FALSE])))
   
-  # Generate heatmap
+  # Generate heatmaps
   pheatmap(
     heatmap_data,
-    cluster_rows = FALSE,
+    # Clustering the rows into similar expression patterns
+    cluster_rows = FALSE, # Interchangeable, recommended as TRUE but allows dirrect comparison across days if FALSE
     cluster_cols = TRUE,
     main = sprintf("Heatmap - Day %s: %s", day, comparison_label)
   )
@@ -391,10 +440,14 @@ generate_heatmap <- function(day, condition, global_genes, comparison_label) {
 Running the analysis across all conditions
 
 ```{r}
+# For loop to iterate over each condition
+# uses get union and heatmap functions
 for (condition in conditions) {
+  # Get the union genes (global)
   global_genes <- get_union_genes_across_days(condition)
-  
+  # if no DEGs found skip heatmap
   if (!is.null(global_genes)) {
+    # for loop to iterate over days (and condition) to create heatmaps
     for (day in days) {
       generate_heatmap(day, condition, global_genes, sprintf("%s_vs_A", condition))
     }
